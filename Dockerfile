@@ -14,7 +14,6 @@ COPY dashboard.py ./dashboard.py
 COPY models ./models
 
 ENV PYTHONPATH=/app
-ENV VOICECLONEGUARD_MODEL=/app/models/voice_cloning_model.pkl
 
 EXPOSE 8000
 
