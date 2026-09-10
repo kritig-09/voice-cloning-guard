@@ -98,6 +98,12 @@ def health() -> dict:
         "model_connected": model is not None,
         "model_type": MODEL_TYPE,
         "model_path": MODEL_PATH.name if MODEL_PATH.exists() else None,
+        "feature_count": getattr(model, "feature_count", None),
+        "feature_version": getattr(model, "feature_version", None),
+        "training_sample_count": getattr(model, "sample_count", None),
+        "window_seconds": WINDOW_SECONDS,
+        "hop_seconds": HOP_SECONDS,
+        "supported_formats": sorted(ext.lstrip(".") for ext in SUPPORTED_AUDIO_EXTENSIONS),
     }
 
 
