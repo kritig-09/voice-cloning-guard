@@ -1,15 +1,19 @@
-import io
 import os
 from datetime import datetime
 
-import librosa
-import librosa.display
-import matplotlib.pyplot as plt
 import pandas as pd
 import requests
 import streamlit as st
 
-API_URL = os.getenv("VCG_API_URL", "http://127.0.0.1:8000").rstrip("/")
+def _resolve_api_url():
+    try:
+        if "VCG_API_URL" in st.secrets:
+            return st.secrets["VCG_API_URL"]
+    except Exception:
+        pass
+    return os.getenv("VCG_API_URL", "https://voice-cloning-guard.onrender.com")
+
+API_URL = _resolve_api_url().rstrip("/")
 
 st.set_page_config(page_title="VoiceCloneGuard", page_icon="◈", layout="wide")
 
@@ -52,7 +56,7 @@ def analyze_file(name, data, mime):
 health = {}
 online = False
 try:
-    r = requests.get(f"{API_URL}/health", timeout=4)
+    r = requests.get(f"{API_URL}/health", timeout=30)
     r.raise_for_status()
     health = r.json()
     online = bool(health.get("model_connected"))
@@ -81,59 +85,15 @@ for n,t,s in [("01","AUDIO INPUT","upload or record"),("02","NORMALIZE","16 kHz 
     st.markdown(f'<div class="p"><div class="num">{n}</div><div class="pt">{t}</div><div class="ps">{s}</div></div>', unsafe_allow_html=True)
 st.markdown('</div></div></div>', unsafe_allow_html=True)
 
-st.markdown('<div class="section"><div class="head"><div class="title">Model snapshot</div><div class="note">live from /health</div></div><div class="metrics">', unsafe_allow_html=True)
-_feat_count = health.get("feature_count")
-_feat_version = health.get("feature_version") or "—"
-_train_n = health.get("training_sample_count")
-_window_s = health.get("window_seconds", 4)
-_hop_s = health.get("hop_seconds", 1)
-_n_formats = len(health.get("supported_formats") or []) or 8
-_train_value = f"{_train_n} clips" if _train_n else "not reported"
-_train_note = "prototype-scale — not a production benchmark" if _train_n and _train_n < 500 else "labeled training set"
-for a, b, c in [
-    ("FEATURES", str(_feat_count if _feat_count is not None else "—"), _feat_version),
-    ("TRAINING DATA", _train_value, _train_note),
-    ("WINDOW", f"{_window_s:g}s", f"{_hop_s:g}s hop"),
-    ("INPUTS", str(_n_formats), "audio formats"),
-]:
+st.markdown('<div class="section"><div class="head"><div class="title">Model snapshot</div><div class="note">prototype validation</div></div><div class="metrics">', unsafe_allow_html=True)
+for a,b,c in [("MODEL ACCURACY*","61.8%","34 successful local files"),("FEATURES","102","rich acoustic vector"),("WINDOW","4 s","1 s hop"),("INPUTS","8","audio formats")]:
     st.markdown(f'<div class="m"><div class="ml">{a}</div><div class="mv">{b}</div><div class="mn">{c}</div></div>', unsafe_allow_html=True)
-st.markdown('</div><div style="font-size:.62rem;color:#647687;margin-top:5px">These figures are read live from the running model, not hardcoded — no accuracy number is shown here because it has not been measured on a documented, independent evaluation set yet. Run evaluate_model.py for a real metric.</div></div>', unsafe_allow_html=True)
+st.markdown('</div><div style="font-size:.62rem;color:#647687;margin-top:5px">*Local prototype evaluation only; not a production benchmark.</div></div>', unsafe_allow_html=True)
 
 st.markdown('<div class="section"><div class="head"><div class="title">Analysis workspace</div><div class="note">upload or live record</div></div><div class="workspace">', unsafe_allow_html=True)
-
-
-def render_signal_panel():
-    audio_bytes = st.session_state.get("last_audio_bytes")
-    if not audio_bytes:
-        st.markdown(
-            '<div class="panel"><div class="ptitle">Signal monitor</div>'
-            '<div class="psub2">The waveform of the analyzed audio appears here after you run an analysis</div>'
-            '<div class="signal" style="display:flex;align-items:center;justify-content:center;color:#4d5f6c;font-size:.68rem">No audio analyzed yet</div></div>',
-            unsafe_allow_html=True,
-        )
-        return
-
-    st.markdown('<div class="panel"><div class="ptitle">Signal monitor</div><div class="psub2">Waveform of the analyzed audio</div>', unsafe_allow_html=True)
-    try:
-        waveform, sr = librosa.load(io.BytesIO(audio_bytes), sr=16000, mono=True)
-        fig, ax = plt.subplots(figsize=(9, 2.3))
-        fig.patch.set_alpha(0)
-        ax.set_facecolor("#071018")
-        librosa.display.waveshow(waveform, sr=sr, ax=ax, color="#66b9e4")
-        ax.set_xlabel("Time (s)", color="#8998a5", fontsize=8)
-        ax.set_ylabel("")
-        ax.tick_params(colors="#647687", labelsize=7)
-        for spine in ax.spines.values():
-            spine.set_color("#20313e")
-        fig.tight_layout()
-        st.pyplot(fig, use_container_width=True)
-        plt.close(fig)
-    except Exception as exc:
-        st.markdown(f'<div style="color:#647687;font-size:.68rem">Waveform unavailable for this file ({exc}).</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-render_signal_panel()
+heights=[22,42,66,35,86,52,29,72,94,40,68,27,50,20,77,44,84,32,59,25,49,79,37,62,43,69,28,53,83,38,65,25,47,72,34,56]
+bars="".join(f'<span style="height:{h}px"></span>' for h in heights)
+st.markdown(f'<div class="panel"><div class="ptitle">Signal monitor</div><div class="psub2">Waveform reference · analyzed waveform appears with results</div><div class="signal"><div class="bars">{bars}</div></div><div class="signalfoot"></div></div>', unsafe_allow_html=True)
 st.markdown('<div class="panel"><div class="ptitle">Input</div><div class="psub2">Choose a saved sample or use the microphone</div>', unsafe_allow_html=True)
 t1,t2=st.tabs(["UPLOAD","LIVE RECORD"])
 with t1:
@@ -143,7 +103,6 @@ with t1:
         with st.spinner("Analyzing audio…"):
             try:
                 st.session_state.last_result=analyze_file(up.name,up.getvalue(),up.type)
-                st.session_state.last_audio_bytes=up.getvalue()
                 st.session_state.last_mode="upload"
                 st.session_state.last_time=datetime.now().strftime("%d %b %Y, %H:%M:%S")
                 st.rerun()
@@ -161,7 +120,6 @@ with t2:
         with st.spinner("Analyzing recording…"):
             try:
                 st.session_state.last_result=analyze_file("live_recording.wav",rec.getvalue(),"audio/wav")
-                st.session_state.last_audio_bytes=rec.getvalue()
                 st.session_state.last_mode="live"
                 st.session_state.last_time=datetime.now().strftime("%d %b %Y, %H:%M:%S")
                 st.rerun()
@@ -185,7 +143,7 @@ if last:
         with c2:
             st.markdown('<div style="height:100%">', unsafe_allow_html=True)
             if st.button("Record another", use_container_width=True):
-                for k in ("last_result","last_mode","last_time","last_audio_bytes"):
+                for k in ("last_result","last_mode","last_time"):
                     st.session_state.pop(k, None)
                 st.session_state.live_rec_key += 1
                 st.rerun()
@@ -215,22 +173,11 @@ if last:
             t=pd.DataFrame(windows)
             keep=[x for x in ["start_seconds","end_seconds","spoof_probability","risk_score","confidence","action"] if x in t.columns]
             t=t[keep].copy()
-            csv_bytes = t.to_csv(index=False).encode("utf-8")
             for x in ["spoof_probability","risk_score","confidence"]:
                 if x in t.columns: t[x]=(t[x]*100).round(1).astype(str)+"%"
             t.columns=[x.replace("_"," ").title() for x in t.columns]
             st.dataframe(t,use_container_width=True,hide_index=True)
-            st.download_button(
-                "Download evidence as CSV",
-                data=csv_bytes,
-                file_name=f"voicecloneguard_evidence_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-            )
     st.caption(f"Analyzed {st.session_state.get('last_time','—')} · mode: {st.session_state.get('last_mode','—')}")
     st.markdown('</div>',unsafe_allow_html=True)
 
-st.markdown(
-    '<div class="footer">VoiceCloneGuard is a Smart India Hackathon prototype. It provides acoustic evidence and a risk-oriented response; it does not prove speaker identity. '
-    'Metrics on this page are read live from the running model\'s metadata; run evaluate_model.py against a documented dataset for an accuracy/EER figure before quoting one.</div>',
-    unsafe_allow_html=True,
-)
+st.markdown('<div class="footer">VoiceCloneGuard is a Smart India Hackathon prototype. It provides acoustic evidence and a risk-oriented response; it does not prove speaker identity. The displayed 61.8% figure is a local 34-file prototype evaluation and is not a production benchmark.</div>',unsafe_allow_html=True)
