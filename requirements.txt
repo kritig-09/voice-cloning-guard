@@ -1,2 +1,9 @@
 streamlit>=1.32.0
 requests>=2.31.0
+streamlit-webrtc
+librosa
+numpy
+joblib
+matplotlib
+scikit-learn
+av
