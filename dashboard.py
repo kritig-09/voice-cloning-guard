@@ -1,7 +1,11 @@
+import io
+import math
 import os
 import time
+import wave
 from datetime import datetime
 
+import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
@@ -59,6 +63,16 @@ DEFAULT_HISTORY = [
 
 if "live_rec_key" not in st.session_state:
     st.session_state.live_rec_key = 0
+if "current_audio_bytes" not in st.session_state:
+    st.session_state.current_audio_bytes = None
+if "current_audio_name" not in st.session_state:
+    st.session_state.current_audio_name = "ceo_q4_earnings_memo.wav"
+if "current_audio_duration" not in st.session_state:
+    st.session_state.current_audio_duration = 45.0
+if "processed_file_hash" not in st.session_state:
+    st.session_state.processed_file_hash = None
+if "processed_mic_hash" not in st.session_state:
+    st.session_state.processed_mic_hash = None
 
 qp_page = st.query_params.get("page", None)
 if qp_page in ["Home", "Analyze", "History", "Model", "Settings"]:
@@ -68,6 +82,61 @@ elif "nav_page" not in st.session_state:
 
 if "history" not in st.session_state:
     st.session_state.history = list(DEFAULT_HISTORY)
+
+def compute_waveform_bars(audio_bytes, num_bars=76, height=68, bar_w=2.8, width=620):
+    gap = (width - num_bars * bar_w) / (num_bars - 1)
+    amplitudes = []
+    duration_sec = 0.0
+    if not audio_bytes:
+        for i in range(num_bars):
+            t = i / (num_bars - 1)
+            env = math.sin(math.pi * t) ** 0.8
+            b1 = math.exp(-((t - 0.28) / 0.12) ** 2)
+            b2 = math.exp(-((t - 0.62) / 0.18) ** 2)
+            b3 = math.exp(-((t - 0.85) / 0.08) ** 2)
+            var = 0.35 + 0.4 * b1 + 0.5 * b2 + 0.3 * b3 + 0.15 * math.sin(18 * math.pi * t)
+            h = max(4.0, min(height - 4, round(height * 0.9 * env * var, 1)))
+            x = round(i * (bar_w + gap), 1)
+            y = round((height - h) / 2, 1)
+            color = "#4f75e2" if t <= 0.34 else "#93c5fd"
+            amplitudes.append((x, y, h, color))
+        return "".join(f'<rect x="{x}" y="{y}" width="{bar_w}" height="{h}" rx="1.4" fill="{c}"/>' for x, y, h, c in amplitudes), 45.0
+
+    try:
+        with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
+            n_ch = wf.getnchannels()
+            sw = wf.getsampwidth()
+            fr = wf.getframerate()
+            nf = wf.getnframes()
+            duration_sec = nf / max(1, fr)
+            frames = wf.readframes(nf)
+            dtype = np.int16 if sw == 2 else np.int8 if sw == 1 else np.int32
+            arr = np.frombuffer(frames, dtype=dtype)
+            if n_ch > 1:
+                arr = arr[::n_ch]
+            arr = np.abs(arr.astype(float))
+            step = max(1, len(arr) // num_bars)
+            for i in range(num_bars):
+                chunk = arr[i * step : (i + 1) * step]
+                amplitudes.append(float(np.mean(chunk)) if len(chunk) > 0 else 0.0)
+    except Exception:
+        duration_sec = max(2.0, round(len(audio_bytes) / 32000.0, 1))
+        step = max(1, len(audio_bytes) // num_bars)
+        for i in range(num_bars):
+            chunk = np.frombuffer(audio_bytes[i * step : (i + 1) * step], dtype=np.uint8)
+            amplitudes.append(float(np.std(chunk)) if len(chunk) > 0 else 10.0)
+
+    max_a = max(amplitudes) if amplitudes and max(amplitudes) > 0 else 1.0
+    norm_amps = [a / max_a for a in amplitudes]
+
+    bars_svg = []
+    for i, amp in enumerate(norm_amps):
+        h = max(4.0, min(height - 4, round(height * (0.12 + 0.84 * amp), 1)))
+        x = round(i * (bar_w + gap), 1)
+        y = round((height - h) / 2, 1)
+        color = "#4f75e2" if i <= int(num_bars * 0.38) else "#93c5fd"
+        bars_svg.append(f'<rect x="{x}" y="{y}" width="{bar_w}" height="{h}" rx="1.4" fill="{color}"/>')
+    return "".join(bars_svg), round(duration_sec, 1)
 
 def pct(v):
     return "—" if v is None else f"{float(v)*100:.1f}%"
@@ -124,6 +193,20 @@ html, body, [class*="css"], .stApp {
     color: #18202f !important;
 }
 
+/* STRICT GLOBAL RESET FOR ANCHOR TAGS: ZERO UNDERLINES & ZERO BLUE TEXT */
+a, a:link, a:visited, a:hover, a:active, a:focus,
+[data-testid="stSidebar"] a,
+[data-testid="stSidebar"] a:link,
+[data-testid="stSidebar"] a:visited,
+[data-testid="stSidebar"] a:hover,
+[data-testid="stSidebar"] a:active,
+[data-testid="stSidebar"] a:focus,
+.stMarkdown a,
+[data-testid="stMarkdownContainer"] a {
+    text-decoration: none !important;
+    color: inherit !important;
+}
+
 /* HIDE STREAMLIT CHROME COMPLETELY */
 .stDeployButton,
 [data-testid="stToolbar"],
@@ -139,9 +222,12 @@ footer {
     margin: 0 !important;
 }
 
-/* PERMANENT, PINNED SIDEBAR */
+/* STRICT NON-SCROLLABLE PINNED SIDEBAR (NO SCROLLBAR, ZERO OVERFLOW) */
 section[data-testid="stSidebar"],
 [data-testid="stSidebar"],
+[data-testid="stSidebarContent"],
+section[data-testid="stSidebar"] > div,
+div[data-testid="stSidebarUserContent"],
 [data-testid="stSidebar"][aria-expanded="false"],
 [data-testid="stSidebar"][aria-expanded="true"] {
     display: block !important;
@@ -154,17 +240,58 @@ section[data-testid="stSidebar"],
     background-color: #f7f5f2 !important;
     border-right: 1px solid #eae5de !important;
     position: relative !important;
+    overflow: hidden !important;
+    overflow-y: hidden !important;
+    overflow-x: hidden !important;
+    height: 100vh !important;
+    max-height: 100vh !important;
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
 }
 
-section[data-testid="stSidebar"] > div:first-child {
-    padding-top: 1.4rem !important;
-    padding-left: 0.9rem !important;
-    padding-right: 0.9rem !important;
+section[data-testid="stSidebar"]::-webkit-scrollbar,
+section[data-testid="stSidebar"] *::-webkit-scrollbar,
+[data-testid="stSidebar"]::-webkit-scrollbar,
+[data-testid="stSidebarContent"]::-webkit-scrollbar {
+    display: none !important;
+    width: 0px !important;
+    height: 0px !important;
+}
+
+section[data-testid="stSidebar"] > div:first-child,
+div[data-testid="stSidebarContent"] {
+    padding: 0 !important;
+    margin: 0 !important;
+    height: 100vh !important;
+    max-height: 100vh !important;
+    overflow: hidden !important;
+    box-sizing: border-box !important;
+}
+
+div[data-testid="stSidebarUserContent"] {
+    padding: 0.6rem 0.8rem 0.6rem 0.8rem !important;
+    margin: 0 !important;
+    height: 100% !important;
+    max-height: 100vh !important;
+    overflow: hidden !important;
+    box-sizing: border-box !important;
 }
 
 [data-testid="stSidebarCollapseButton"],
 [data-testid="collapsedControl"] {
     display: none !important;
+}
+
+/* SIDEBAR FLEX LAYOUT: FITS 100% INTO VIEWPORT WITHOUT ANY SCROLL */
+.vcg-sidebar-container {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    height: calc(100vh - 95px);
+    max-height: calc(100vh - 95px);
+    padding-bottom: 20px;
+    box-sizing: border-box;
+    overflow: hidden;
 }
 
 /* MAIN CONTAINER WIDTH & PADDING */
@@ -279,33 +406,44 @@ div[data-testid="stTabs"] div[data-baseweb="tab-panel"] {
     padding: 12px 18px !important;
 }
 
-/* SIDEBAR NAVIGATION ITEMS */
+/* SIDEBAR NAVIGATION ITEMS: CLEAN, NO UNDERLINES, PILL HIGHLIGHT */
+a.vcg-nav-link,
 .vcg-nav-link {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 14px;
-    border-radius: 12px;
-    font-size: 13.5px;
-    font-weight: 500;
-    color: #64748b;
-    text-decoration: none;
-    margin-bottom: 4px;
-    transition: all 0.15s ease;
+    display: flex !important;
+    align-items: center !important;
+    gap: 11px !important;
+    padding: 6.5px 12px !important;
+    border-radius: 10px !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    color: #64748b !important;
+    text-decoration: none !important;
+    margin-bottom: 2px !important;
+    transition: all 0.15s ease !important;
+    background-color: transparent !important;
 }
+a.vcg-nav-link:hover,
 .vcg-nav-link:hover {
-    background-color: #ede9e2;
-    color: #18202f;
-    text-decoration: none;
+    background-color: #ede9e2 !important;
+    color: #18202f !important;
+    text-decoration: none !important;
 }
+a.vcg-nav-link.active,
 .vcg-nav-link.active {
-    background-color: #e8e4dc;
-    color: #18202f;
-    font-weight: 700;
+    background-color: #e8e4dc !important;
+    color: #18202f !important;
+    font-weight: 700 !important;
+    text-decoration: none !important;
 }
-.vcg-nav-link svg {
-    flex-shrink: 0;
-    stroke: currentColor;
+.vcg-nav-link span,
+a.vcg-nav-link span {
+    text-decoration: none !important;
+    color: inherit !important;
+}
+.vcg-nav-link svg,
+a.vcg-nav-link svg {
+    flex-shrink: 0 !important;
+    stroke: currentColor !important;
 }
 
 /* SHORTCUT CARDS */
@@ -333,22 +471,6 @@ div[data-testid="stTabs"] div[data-baseweb="tab-panel"] {
 # 1. PERMANENT SIDEBAR NAVBAR (PURE NATIVE CREAM PALETTE)
 # ─────────────────────────────────────────────────────────────
 with st.sidebar:
-    r_html("""
-    <div style="display:flex; align-items:center; gap:10px; padding:4px 4px 24px;">
-        <svg width="26" height="26" viewBox="0 0 28 28" fill="none">
-            <rect x="2" y="10" width="3" height="8" rx="1.5" fill="#4f75e2"/>
-            <rect x="7.5" y="6" width="3" height="16" rx="1.5" fill="#4f75e2"/>
-            <rect x="13" y="2" width="3" height="24" rx="1.5" fill="#4f75e2"/>
-            <rect x="18.5" y="7" width="3" height="14" rx="1.5" fill="#4f75e2"/>
-            <rect x="24" y="11" width="3" height="6" rx="1.5" fill="#4f75e2"/>
-        </svg>
-        <div>
-            <div style="font-size:15.5px; font-weight:800; color:#18202f; line-height:1.2;">VoiceCloneGuard</div>
-            <div style="font-size:10px; color:#8c96a5; line-height:1.3; margin-top:2px;">Voice authenticity &amp;<br>impersonation risk console</div>
-        </div>
-    </div>
-""")
-
     curr = st.session_state.nav_page
     h_act = "active" if curr == "Home" else ""
     a_act = "active" if curr == "Analyze" else ""
@@ -357,64 +479,83 @@ with st.sidebar:
     s_act = "active" if curr == "Settings" else ""
 
     r_html(f"""
-    <div style="display:flex; flex-direction:column; gap:2px; margin-bottom:20px;">
-        <a href="?page=Home" target="_self" class="vcg-nav-link {h_act}">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-            <span>Home</span>
-        </a>
-        <a href="?page=Analyze" target="_self" class="vcg-nav-link {a_act}">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5v14M7 9v6M22 10v4M2 11v2"></path></svg>
-            <span>Analyze</span>
-        </a>
-        <a href="?page=History" target="_self" class="vcg-nav-link {hi_act}">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-            <span>History</span>
-        </a>
-        <a href="?page=Model" target="_self" class="vcg-nav-link {m_act}">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
-            <span>Model</span>
-        </a>
-        <a href="?page=Settings" target="_self" class="vcg-nav-link {s_act}">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-            <span>Settings</span>
-        </a>
-    </div>
-""")
-
-    # Flowing Pastel Wave in Sidebar
-    r_html("""
-    <div style="margin: 40px 0 20px 0; padding: 0 4px; opacity: 0.95;">
-        <svg width="100%" height="80" viewBox="0 0 220 80" fill="none">
-            <defs>
-                <linearGradient id="navWaveGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stop-color="#93c5fd" stop-opacity="0.35"/>
-                    <stop offset="50%" stop-color="#c4b5fd" stop-opacity="0.45"/>
-                    <stop offset="100%" stop-color="#fed7aa" stop-opacity="0.35"/>
-                </linearGradient>
-                <linearGradient id="navWaveGrad2" x1="0%" y1="50%" x2="100%" y2="50%">
-                    <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.45"/>
-                    <stop offset="60%" stop-color="#8b5cf6" stop-opacity="0.5"/>
-                    <stop offset="100%" stop-color="#f97316" stop-opacity="0.4"/>
-                </linearGradient>
-            </defs>
-            <path d="M0,55 C40,30 75,70 120,45 C165,20 190,60 220,40 L220,80 L0,80 Z" fill="url(#navWaveGrad1)"/>
-            <path d="M0,58 C45,35 75,65 125,40 C170,22 195,52 220,38" stroke="url(#navWaveGrad2)" stroke-width="1.8" stroke-linecap="round" fill="none"/>
-            <path d="M0,64 C45,40 75,70 125,45 C170,27 195,57 220,43" stroke="url(#navWaveGrad2)" stroke-width="1.3" stroke-opacity="0.7" stroke-linecap="round" fill="none"/>
-            <path d="M0,70 C45,45 75,75 125,50 C170,32 195,62 220,48" stroke="url(#navWaveGrad2)" stroke-width="0.8" stroke-opacity="0.45" stroke-linecap="round" fill="none"/>
-        </svg>
-    </div>
-""")
-
-    # Frosted Glass Promo Card at Bottom Left
-    r_html("""
-    <div style="position:relative; overflow:hidden; background:rgba(255, 255, 255, 0.65); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); border:1px solid rgba(255, 255, 255, 0.9); border-radius:16px; padding:16px; box-shadow:0 4px 18px rgba(0,0,0,0.03);">
-        <div style="position:absolute; right:-20px; bottom:-20px; width:80px; height:80px; background:radial-gradient(circle, rgba(196, 181, 253, 0.45) 0%, rgba(254, 215, 170, 0.35) 60%, transparent 80%); pointer-events:none; border-radius:50%;"></div>
-        <div style="position:relative; z-index:2;">
-            <div style="font-size:12.5px; font-weight:700; color:#18202f; line-height:1.4; margin-bottom:10px;">
-                A safer digital world<br>starts with authentic<br>voices.
+    <div class="vcg-sidebar-container">
+        <!-- TOP SECTION: Logo + Navigation Links -->
+        <div>
+            <!-- Brand Logo & Console Header -->
+            <div style="display:flex; align-items:center; gap:9px; padding:2px 2px 10px;">
+                <svg width="24" height="24" viewBox="0 0 28 28" fill="none">
+                    <rect x="2" y="10" width="3" height="8" rx="1.5" fill="#4f75e2"/>
+                    <rect x="7.5" y="6" width="3" height="16" rx="1.5" fill="#4f75e2"/>
+                    <rect x="13" y="2" width="3" height="24" rx="1.5" fill="#4f75e2"/>
+                    <rect x="18.5" y="7" width="3" height="14" rx="1.5" fill="#4f75e2"/>
+                    <rect x="24" y="11" width="3" height="6" rx="1.5" fill="#4f75e2"/>
+                </svg>
+                <div>
+                    <div style="font-size:14.5px; font-weight:800; color:#18202f; line-height:1.2;">VoiceCloneGuard</div>
+                    <div style="font-size:9.5px; color:#8c96a5; line-height:1.25; margin-top:1px;">Voice authenticity &amp;<br>impersonation risk console</div>
+                </div>
             </div>
-            <div style="font-size:11px; font-weight:600; color:#475569; display:flex; align-items:center; gap:4px; cursor:pointer;">
-                Learn more &rarr;
+
+            <!-- Navigation Links (100% Clean, No Underlines, Exact SVG Icons) -->
+            <div style="display:flex; flex-direction:column; gap:1px;">
+                <a href="?page=Home" target="_self" class="vcg-nav-link {h_act}" style="text-decoration:none !important;">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+                    <span>Home</span>
+                </a>
+                <a href="?page=Analyze" target="_self" class="vcg-nav-link {a_act}" style="text-decoration:none !important;">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5v14M7 9v6M22 10v4M2 11v2"></path></svg>
+                    <span>Analyze</span>
+                </a>
+                <a href="?page=History" target="_self" class="vcg-nav-link {hi_act}" style="text-decoration:none !important;">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                    <span>History</span>
+                </a>
+                <a href="?page=Model" target="_self" class="vcg-nav-link {m_act}" style="text-decoration:none !important;">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                    <span>Model</span>
+                </a>
+                <a href="?page=Settings" target="_self" class="vcg-nav-link {s_act}" style="text-decoration:none !important;">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                    <span>Settings</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- BOTTOM SECTION: Pastel Wave + Frosted Promo Card -->
+        <div style="padding-top:4px; padding-bottom:12px;">
+            <!-- Subtle Flowing Wave (Compact 22px height) -->
+            <div style="margin: 0 0 6px 0; padding: 0 2px; opacity: 0.9;">
+                <svg width="100%" height="22" viewBox="0 0 220 22" fill="none">
+                    <defs>
+                        <linearGradient id="navWaveGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stop-color="#93c5fd" stop-opacity="0.35"/>
+                            <stop offset="50%" stop-color="#c4b5fd" stop-opacity="0.45"/>
+                            <stop offset="100%" stop-color="#fed7aa" stop-opacity="0.35"/>
+                        </linearGradient>
+                        <linearGradient id="navWaveGrad2" x1="0%" y1="50%" x2="100%" y2="50%">
+                            <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.45"/>
+                            <stop offset="60%" stop-color="#8b5cf6" stop-opacity="0.5"/>
+                            <stop offset="100%" stop-color="#f97316" stop-opacity="0.4"/>
+                        </linearGradient>
+                    </defs>
+                    <path d="M0,15 C40,7 75,19 120,12 C165,5 190,17 220,11 L220,22 L0,22 Z" fill="url(#navWaveGrad1)"/>
+                    <path d="M0,16 C45,9 75,17 125,10 C170,5 195,14 220,10" stroke="url(#navWaveGrad2)" stroke-width="1.4" stroke-linecap="round" fill="none"/>
+                    <path d="M0,18 C45,11 75,19 125,12 C170,7 195,16 220,12" stroke="url(#navWaveGrad2)" stroke-width="1.0" stroke-opacity="0.7" stroke-linecap="round" fill="none"/>
+                </svg>
+            </div>
+
+            <!-- Frosted Glass Promo Card (Shifted upward, 100% visible) -->
+            <div style="position:relative; overflow:hidden; background:rgba(255, 255, 255, 0.75); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); border:1px solid rgba(255, 255, 255, 0.95); border-radius:12px; padding:10px 12px; box-shadow:0 2px 10px rgba(0,0,0,0.03);">
+                <div style="position:absolute; right:-20px; bottom:-20px; width:65px; height:65px; background:radial-gradient(circle, rgba(196, 181, 253, 0.45) 0%, rgba(254, 215, 170, 0.35) 60%, transparent 80%); pointer-events:none; border-radius:50%;"></div>
+                <div style="position:relative; z-index:2;">
+                    <div style="font-size:11.5px; font-weight:700; color:#18202f; line-height:1.3; margin-bottom:6px;">
+                        A safer digital world<br>starts with authentic<br>voices.
+                    </div>
+                    <div style="font-size:10px; font-weight:600; color:#475569; display:flex; align-items:center; gap:4px; cursor:pointer;">
+                        Learn more &rarr;
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -536,6 +677,7 @@ if st.session_state.nav_page == "Home":
 
         # ── 2. DETECTION OVERVIEW CARD ──
         last = st.session_state.get("last_result")
+        active_audio_label = st.session_state.get("current_audio_name", "ceo_q4_earnings_memo.wav")
         if last:
             final = last.get("final", {})
             action_code, action_label, action_desc = decision(final.get("action"))
@@ -553,7 +695,7 @@ if st.session_state.nav_page == "Home":
             risk_val = float(final.get("risk_score", 0.8))
             evidence_score = f"{int(round(risk_val * 5))}/5"
             evidence_bar_w = f"{max(5.0, min(100.0, risk_val * 100)):.1f}%"
-            disp_inputs = str(len(last.get("segments", [])) or 8)
+            disp_inputs = str(last.get("windows_analyzed") or len(last.get("windows", [])) or 1)
         else:
             action_code, action_label, action_desc = "allow", "Likely Real Voice", "Current evidence is below the verification threshold."
             disp_accuracy = "61.8%"
@@ -676,6 +818,15 @@ if st.session_state.nav_page == "Home":
         </div>
         """)
 
+        # Waveform generation from active audio or default
+        current_bars_svg, calc_dur = compute_waveform_bars(st.session_state.current_audio_bytes)
+        dur_seconds = int(st.session_state.current_audio_duration or calc_dur or 4)
+        dur_min = dur_seconds // 60
+        dur_sec = dur_seconds % 60
+        dur_str = f"{dur_min}:{dur_sec:02d}"
+        cur_pos_sec = min(12, dur_seconds) if dur_seconds > 12 else max(1, dur_seconds // 2)
+        cur_str = f"0:{cur_pos_sec:02d}"
+
         # Tab view switcher: Waveform, Spectrogram, Features (100% Client-side React - ZERO BLINK)
         ws_tabs = st.tabs(["Waveform", "Spectrogram", "Features"])
 
@@ -683,10 +834,14 @@ if st.session_state.nav_page == "Home":
             # Audio Waveform Player with Accurate Speech Bar Spectrum
             r_html(f"""
             <div style="margin:10px 0 16px 0; background:#ffffff; border:1px solid #ede9e2; border-radius:14px; padding:16px 20px;">
-                <!-- Audio Waveform with Vertical Frequency Bars & Scrubber Pin -->
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <span style="font-size:11.5px; font-weight:700; color:#18202f; text-transform:uppercase; letter-spacing:0.5px;">Spectrum Monitor: {active_audio_label}</span>
+                    <span style="font-size:11px; color:#4f75e2; font-weight:600; background:#eff4ff; padding:2px 8px; border-radius:6px;">76 Dynamic Bins</span>
+                </div>
+                <!-- Audio Waveform with Dynamic Vertical Frequency Bars & Scrubber Pin -->
                 <div style="position:relative; width:100%; height:68px; margin-bottom:12px; display:flex; align-items:center;">
                     <svg width="100%" height="68" viewBox="0 0 620 68" preserveAspectRatio="none" fill="none">
-                        <rect x="0.0" y="32.0" width="2.8" height="4.0" rx="1.4" fill="#4f75e2"/><rect x="8.2" y="32.0" width="2.8" height="4.0" rx="1.4" fill="#4f75e2"/><rect x="16.5" y="31.9" width="2.8" height="4.2" rx="1.4" fill="#4f75e2"/><rect x="24.7" y="31.2" width="2.8" height="5.5" rx="1.4" fill="#4f75e2"/><rect x="32.9" y="31.2" width="2.8" height="5.6" rx="1.4" fill="#4f75e2"/><rect x="41.1" y="31.6" width="2.8" height="4.9" rx="1.4" fill="#4f75e2"/><rect x="49.4" y="31.7" width="2.8" height="4.6" rx="1.4" fill="#4f75e2"/><rect x="57.6" y="31.1" width="2.8" height="5.9" rx="1.4" fill="#4f75e2"/><rect x="65.8" y="29.4" width="2.8" height="9.1" rx="1.4" fill="#4f75e2"/><rect x="74.1" y="27.2" width="2.8" height="13.5" rx="1.4" fill="#4f75e2"/><rect x="82.3" y="25.3" width="2.8" height="17.4" rx="1.4" fill="#4f75e2"/><rect x="90.5" y="24.4" width="2.8" height="19.3" rx="1.4" fill="#4f75e2"/><rect x="98.8" y="24.6" width="2.8" height="18.9" rx="1.4" fill="#4f75e2"/><rect x="107.0" y="25.4" width="2.8" height="17.3" rx="1.4" fill="#4f75e2"/><rect x="115.2" y="25.7" width="2.8" height="16.6" rx="1.4" fill="#4f75e2"/><rect x="123.4" y="24.7" width="2.8" height="18.6" rx="1.4" fill="#4f75e2"/><rect x="131.7" y="22.0" width="2.8" height="24.0" rx="1.4" fill="#4f75e2"/><rect x="139.9" y="18.4" width="2.8" height="31.3" rx="1.4" fill="#4f75e2"/><rect x="148.1" y="15.0" width="2.8" height="38.0" rx="1.4" fill="#4f75e2"/><rect x="156.4" y="13.3" width="2.8" height="41.4" rx="1.4" fill="#4f75e2"/><rect x="164.6" y="13.6" width="2.8" height="40.7" rx="1.4" fill="#4f75e2"/><rect x="172.8" y="15.5" width="2.8" height="37.0" rx="1.4" fill="#4f75e2"/><rect x="181.0" y="17.4" width="2.8" height="33.1" rx="1.4" fill="#4f75e2"/><rect x="189.3" y="18.2" width="2.8" height="31.6" rx="1.4" fill="#4f75e2"/><rect x="197.5" y="17.0" width="2.8" height="34.0" rx="1.4" fill="#4f75e2"/><rect x="205.7" y="14.4" width="2.8" height="39.2" rx="1.4" fill="#4f75e2"/><rect x="214.0" y="11.9" width="2.8" height="44.2" rx="1.4" fill="#93c5fd"/><rect x="222.2" y="10.9" width="2.8" height="46.2" rx="1.4" fill="#93c5fd"/><rect x="230.4" y="12.2" width="2.8" height="43.6" rx="1.4" fill="#93c5fd"/><rect x="238.7" y="15.3" width="2.8" height="37.4" rx="1.4" fill="#93c5fd"/><rect x="246.9" y="18.7" width="2.8" height="30.6" rx="1.4" fill="#93c5fd"/><rect x="255.1" y="20.6" width="2.8" height="26.9" rx="1.4" fill="#93c5fd"/><rect x="263.3" y="19.9" width="2.8" height="28.2" rx="1.4" fill="#93c5fd"/><rect x="271.6" y="17.0" width="2.8" height="34.0" rx="1.4" fill="#93c5fd"/><rect x="279.8" y="13.2" width="2.8" height="41.5" rx="1.4" fill="#93c5fd"/><rect x="288.0" y="10.6" width="2.8" height="46.9" rx="1.4" fill="#93c5fd"/><rect x="296.3" y="10.1" width="2.8" height="47.9" rx="1.4" fill="#93c5fd"/><rect x="304.5" y="11.8" width="2.8" height="44.5" rx="1.4" fill="#93c5fd"/><rect x="312.7" y="14.4" width="2.8" height="39.3" rx="1.4" fill="#93c5fd"/><rect x="320.9" y="16.0" width="2.8" height="36.0" rx="1.4" fill="#93c5fd"/><rect x="329.2" y="15.4" width="2.8" height="37.1" rx="1.4" fill="#93c5fd"/><rect x="337.4" y="12.6" width="2.8" height="42.7" rx="1.4" fill="#93c5fd"/><rect x="345.6" y="8.8" width="2.8" height="50.5" rx="1.4" fill="#93c5fd"/><rect x="353.9" y="5.7" width="2.8" height="56.6" rx="1.4" fill="#93c5fd"/><rect x="362.1" y="4.9" width="2.8" height="58.3" rx="1.4" fill="#93c5fd"/><rect x="370.3" y="6.6" width="2.8" height="54.8" rx="1.4" fill="#93c5fd"/><rect x="378.5" y="9.9" width="2.8" height="48.3" rx="1.4" fill="#93c5fd"/><rect x="386.8" y="12.9" width="2.8" height="42.1" rx="1.4" fill="#93c5fd"/><rect x="395.0" y="14.4" width="2.8" height="39.2" rx="1.4" fill="#93c5fd"/><rect x="403.2" y="13.7" width="2.8" height="40.6" rx="1.4" fill="#93c5fd"/><rect x="411.5" y="11.6" width="2.8" height="44.7" rx="1.4" fill="#93c5fd"/><rect x="419.7" y="9.9" width="2.8" height="48.3" rx="1.4" fill="#93c5fd"/><rect x="427.9" y="9.7" width="2.8" height="48.6" rx="1.4" fill="#93c5fd"/><rect x="436.2" y="11.7" width="2.8" height="44.6" rx="1.4" fill="#93c5fd"/><rect x="444.4" y="15.2" width="2.8" height="37.6" rx="1.4" fill="#93c5fd"/><rect x="452.6" y="18.7" width="2.8" height="30.6" rx="1.4" fill="#93c5fd"/><rect x="460.8" y="20.8" width="2.8" height="26.4" rx="1.4" fill="#93c5fd"/><rect x="469.1" y="20.9" width="2.8" height="26.3" rx="1.4" fill="#93c5fd"/><rect x="477.3" y="19.3" width="2.8" height="29.4" rx="1.4" fill="#93c5fd"/><rect x="485.5" y="17.4" width="2.8" height="33.2" rx="1.4" fill="#93c5fd"/><rect x="493.8" y="16.4" width="2.8" height="35.2" rx="1.4" fill="#93c5fd"/><rect x="502.0" y="17.1" width="2.8" height="33.8" rx="1.4" fill="#93c5fd"/><rect x="510.2" y="19.2" width="2.8" height="29.5" rx="1.4" fill="#93c5fd"/><rect x="518.4" y="22.0" width="2.8" height="24.0" rx="1.4" fill="#93c5fd"/><rect x="526.7" y="24.3" width="2.8" height="19.4" rx="1.4" fill="#93c5fd"/><rect x="534.9" y="25.5" width="2.8" height="17.0" rx="1.4" fill="#93c5fd"/><rect x="543.1" y="25.8" width="2.8" height="16.5" rx="1.4" fill="#93c5fd"/><rect x="551.4" y="25.7" width="2.8" height="16.6" rx="1.4" fill="#93c5fd"/><rect x="559.6" y="26.1" width="2.8" height="15.8" rx="1.4" fill="#93c5fd"/><rect x="567.8" y="27.3" width="2.8" height="13.4" rx="1.4" fill="#93c5fd"/><rect x="576.1" y="29.1" width="2.8" height="9.8" rx="1.4" fill="#93c5fd"/><rect x="584.3" y="30.9" width="2.8" height="6.1" rx="1.4" fill="#93c5fd"/><rect x="592.5" y="32.0" width="2.8" height="4.0" rx="1.4" fill="#93c5fd"/><rect x="600.7" y="32.0" width="2.8" height="4.0" rx="1.4" fill="#93c5fd"/><rect x="609.0" y="32.0" width="2.8" height="4.0" rx="1.4" fill="#93c5fd"/><rect x="617.2" y="32.0" width="2.8" height="4.0" rx="1.4" fill="#93c5fd"/>
+                        {current_bars_svg}
                         <!-- Scrubber Pin at current playback position (34%) -->
                         <line x1="211" y1="2" x2="211" y2="66" stroke="#4f75e2" stroke-width="2"/>
                         <circle cx="211" cy="4" r="4.5" fill="#4f75e2"/>
@@ -699,7 +854,7 @@ if st.session_state.nav_page == "Home":
                         <button style="width:34px; height:34px; border-radius:50%; background:#4f75e2; border:none; color:#ffffff; display:flex; align-items:center; justify-content:center; cursor:pointer; box-shadow:0 2px 6px rgba(79,117,226,0.35);">
                             <svg width="13" height="13" viewBox="0 0 24 24" fill="#ffffff"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
                         </button>
-                        <span style="font-size:12px; font-weight:600; color:#64748b;">0:12 / 0:45</span>
+                        <span style="font-size:12px; font-weight:600; color:#64748b;">{cur_str} / {dur_str}</span>
                     </div>
 
                     <div style="flex:1; margin:0 20px; position:relative;">
@@ -720,29 +875,41 @@ if st.session_state.nav_page == "Home":
                     </div>
                 </div>
             </div>
-            """)
+""")
+
+            if st.session_state.current_audio_bytes:
+                st.audio(st.session_state.current_audio_bytes, format="audio/wav")
 
         with ws_tabs[1]:
-            r_html("""
+            r_html(f"""
             <div style="margin:10px 0 16px 0; background:#0f172a; border-radius:14px; padding:18px 20px; color:#ffffff;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:11.5px; color:#94a3b8;">
                     <span>MEL-FREQUENCY SPECTROGRAM HEATMAP (0 - 8000 Hz)</span>
-                    <span style="color:#38bdf8;">Window: 4.0s · Hop: 1.0s · FFT: 1024</span>
+                    <span style="color:#38bdf8;">File: {active_audio_label} · Windows: {disp_inputs}</span>
                 </div>
                 <div style="height:85px; width:100%; border-radius:8px; overflow:hidden; background:linear-gradient(90deg, #1e1b4b 0%, #4338ca 15%, #06b6d4 30%, #10b981 45%, #eab308 60%, #ef4444 75%, #4338ca 90%, #06b6d4 100%); opacity:0.88; position:relative;">
                     <div style="position:absolute; inset:0; background:repeating-linear-gradient(0deg, transparent, transparent 12px, rgba(0,0,0,0.3) 12px, rgba(0,0,0,0.3) 13px);"></div>
                 </div>
                 <div style="display:flex; justify-content:space-between; font-size:10px; color:#64748b; margin-top:6px;">
-                    <span>0.0s</span><span>1.0s</span><span>2.0s</span><span>3.0s</span><span>4.0s</span>
+                    <span>0.0s</span><span>{dur_seconds*0.25:.1f}s</span><span>{dur_seconds*0.5:.1f}s</span><span>{dur_seconds*0.75:.1f}s</span><span>{dur_seconds:.1f}s</span>
                 </div>
             </div>
-            """)
+""")
 
         with ws_tabs[2]:
+            explanations = []
+            if last and "final" in last:
+                explanations = last["final"].get("explanation", [])
+            expl_html = ""
+            for exp in explanations:
+                expl_html += f'<div style="background:#faf8f5; border:1px solid #ede9e2; border-radius:8px; padding:6px 10px; margin-bottom:6px; color:#334155;">{exp}</div>'
+            if not expl_html:
+                expl_html = '<div style="color:#64748b;">No explanation available yet. Analyze an audio file or recording to populate features.</div>'
+
             r_html(f"""
             <div style="margin:10px 0 16px 0; background:#ffffff; border:1px solid #ede9e2; border-radius:14px; padding:16px 20px;">
                 <div style="font-size:12px; font-weight:700; color:#18202f; margin-bottom:12px;">EXTRACTED ACOUSTIC DESCRIPTOR MATRIX ({dyn_features} FEATURES)</div>
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; font-size:11px;">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; font-size:11px; margin-bottom:12px;">
                     <div style="background:#faf8f5; padding:10px 12px; border-radius:8px; border:1px solid #ede9e2;">
                         <div style="font-weight:600; color:#475569; margin-bottom:4px;">MFCC Coefficients (13 bands + &Delta; + &Delta;&Delta;)</div>
                         <div style="height:6px; width:100%; background:#e2e8f0; border-radius:3px; overflow:hidden;"><div style="width:84%; height:100%; background:#4f75e2;"></div></div>
@@ -752,8 +919,10 @@ if st.session_state.nav_page == "Home":
                         <div style="height:6px; width:100%; background:#e2e8f0; border-radius:3px; overflow:hidden;"><div style="width:72%; height:100%; background:#10b981;"></div></div>
                     </div>
                 </div>
+                <div style="font-size:11.5px; font-weight:700; color:#18202f; margin-bottom:6px;">Model Inference Diagnostics:</div>
+                <div style="font-size:11px;">{expl_html}</div>
             </div>
-            """)
+""")
 
         # Input Mode Selector: Client-side tabs (ZERO BLINK / INSTANT SWITCHING)
         in_tabs = st.tabs(["📁  Upload Audio File", "🎙️  Live Voice Record"])
@@ -764,7 +933,7 @@ if st.session_state.nav_page == "Home":
                 <div style="font-size:12.5px; font-weight:700; color:#18202f;">Drag &amp; drop your audio file here</div>
                 <div style="font-size:10.5px; color:#8c96a5;">Supports WAV, FLAC, MP3, OGG, M4A, AAC, MPG · 200MB max</div>
             </div>
-            """)
+""")
 
             uploaded_file = st.file_uploader(
                 "Drag & drop your audio file here",
@@ -777,25 +946,32 @@ if st.session_state.nav_page == "Home":
             with col_btn2:
                 run_btn = st.button("Analyze Audio File →", disabled=(uploaded_file is None), use_container_width=True)
 
-            if run_btn and uploaded_file:
-                with st.spinner("Processing audio through feature extraction engine…"):
-                    try:
-                        res = analyze_file(uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)
-                        st.session_state.last_result = res
-                        st.session_state.last_time = datetime.now().strftime("%d %b %Y · %I:%M %p")
-                        fin = res.get("final", {})
-                        st.session_state.history.insert(0, {
-                            "name": uploaded_file.name,
-                            "type": uploaded_file.name.split(".")[-1].upper(),
-                            "result": fin.get("action", "verify").upper(),
-                            "confidence": pct(fin.get("confidence", 0.724)),
-                            "date": st.session_state.last_time,
-                        })
-                        st.success("File analyzed successfully! Detection overview updated.")
-                        time.sleep(0.5)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Analysis failed: {e}")
+            if uploaded_file:
+                file_sig = f"{uploaded_file.name}_{uploaded_file.size}"
+                if run_btn or st.session_state.get("processed_file_hash") != file_sig:
+                    st.session_state.processed_file_hash = file_sig
+                    audio_data = uploaded_file.getvalue()
+                    st.session_state.current_audio_bytes = audio_data
+                    st.session_state.current_audio_name = uploaded_file.name
+                    with st.spinner(f"Processing {uploaded_file.name} through feature extraction engine…"):
+                        try:
+                            res = analyze_file(uploaded_file.name, audio_data, uploaded_file.type)
+                            st.session_state.last_result = res
+                            st.session_state.last_time = datetime.now().strftime("%d %b %Y · %I:%M %p")
+                            st.session_state.current_audio_duration = float(res.get("duration_seconds", 0.0) or 4.0)
+                            fin = res.get("final", {})
+                            st.session_state.history.insert(0, {
+                                "name": uploaded_file.name,
+                                "type": uploaded_file.name.split(".")[-1].upper(),
+                                "result": fin.get("action", "verify").upper(),
+                                "confidence": pct(fin.get("confidence", 0.724)),
+                                "date": st.session_state.last_time,
+                            })
+                            st.success(f"✓ {uploaded_file.name} analyzed! Detection Overview and Waveform updated.")
+                            time.sleep(0.3)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Analysis failed: {e}")
 
         with in_tabs[1]:
             r_html("""
@@ -803,7 +979,7 @@ if st.session_state.nav_page == "Home":
                 <div style="font-size:12.5px; font-weight:700; color:#18202f;">Record live voice via microphone</div>
                 <div style="font-size:10.5px; color:#8c96a5;">Speak clearly for at least 4 seconds for optimal sliding-window detection</div>
             </div>
-            """)
+""")
 
             mic_audio = st.audio_input("Record Speech", key=f"mic_input_{st.session_state.live_rec_key}")
 
@@ -811,26 +987,33 @@ if st.session_state.nav_page == "Home":
             with col_rec2:
                 run_rec_btn = st.button("Analyze Recording →", disabled=(mic_audio is None), use_container_width=True)
 
-            if run_rec_btn and mic_audio:
-                with st.spinner("Analyzing live microphone audio stream…"):
-                    try:
-                        rec_name = f"mic_capture_{datetime.now().strftime('%H%M%S')}.wav"
-                        res = analyze_file(rec_name, mic_audio.getvalue(), "audio/wav")
-                        st.session_state.last_result = res
-                        st.session_state.last_time = datetime.now().strftime("%d %b %Y · %I:%M %p")
-                        fin = res.get("final", {})
-                        st.session_state.history.insert(0, {
-                            "name": rec_name,
-                            "type": "WAV",
-                            "result": fin.get("action", "verify").upper(),
-                            "confidence": pct(fin.get("confidence", 0.724)),
-                            "date": st.session_state.last_time,
-                        })
-                        st.success("Microphone audio analyzed! Metrics updated.")
-                        time.sleep(0.5)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Live analysis failed: {e}")
+            if mic_audio:
+                rec_bytes = mic_audio.getvalue()
+                rec_sig = f"mic_{len(rec_bytes)}"
+                if run_rec_btn or st.session_state.get("processed_mic_hash") != rec_sig:
+                    st.session_state.processed_mic_hash = rec_sig
+                    st.session_state.current_audio_bytes = rec_bytes
+                    rec_name = f"mic_capture_{datetime.now().strftime('%H%M%S')}.wav"
+                    st.session_state.current_audio_name = rec_name
+                    with st.spinner("Analyzing live microphone audio stream…"):
+                        try:
+                            res = analyze_file(rec_name, rec_bytes, "audio/wav")
+                            st.session_state.last_result = res
+                            st.session_state.last_time = datetime.now().strftime("%d %b %Y · %I:%M %p")
+                            st.session_state.current_audio_duration = float(res.get("duration_seconds", 0.0) or 4.0)
+                            fin = res.get("final", {})
+                            st.session_state.history.insert(0, {
+                                "name": rec_name,
+                                "type": "WAV",
+                                "result": fin.get("action", "verify").upper(),
+                                "confidence": pct(fin.get("confidence", 0.724)),
+                                "date": st.session_state.last_time,
+                            })
+                            st.success("✓ Live recording analyzed! Detection Overview and Waveform updated.")
+                            time.sleep(0.3)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Live analysis failed: {e}")
 
         # Close Analysis Workspace Card
         st.markdown('</div>', unsafe_allow_html=True)
@@ -1063,22 +1246,126 @@ elif st.session_state.nav_page == "Analyze":
     with col_a1:
         st.markdown('<div class="vcg-card">', unsafe_allow_html=True)
         r_html("""
-        <div style="font-size:15px; font-weight:700; color:#18202f; margin-bottom:6px;">Upload or Stream Audio for Deep Inspection</div>
-        <div style="font-size:11.5px; color:#8c96a5; margin-bottom:16px;">Supports all SIH benchmark formats: WAV, FLAC, MP3, OGG, M4A, AAC, MPG</div>
-        """)
+        <div style="font-size:15px; font-weight:700; color:#18202f; margin-bottom:4px;">Upload or Stream Audio for Deep Inspection</div>
+        <div style="font-size:11.5px; color:#8c96a5; margin-bottom:14px;">Supports all SIH benchmark formats: WAV, FLAC, MP3, OGG, M4A, AAC, MPG</div>
+""")
 
-        a_file = st.file_uploader("Analyze Audio File", type=["wav", "mp3", "flac", "ogg", "m4a", "aac", "mpg", "mpeg"], key="deep_analyze_uploader")
-        if a_file:
-            if st.button("Run Deep Analysis →", key="btn_deep_run"):
-                with st.spinner("Extracting 102 acoustic feature descriptors…"):
-                    try:
-                        res = analyze_file(a_file.name, a_file.getvalue(), a_file.type)
-                        st.session_state.last_result = res
-                        st.session_state.last_time = datetime.now().strftime("%d %b %Y · %I:%M %p")
-                        st.success("Deep Analysis Completed!")
-                    except Exception as e:
-                        st.error(f"Analysis failed: {e}")
+        deep_tabs = st.tabs(["📁  Upload Audio File", "🎙️  Live Voice Record"])
+        with deep_tabs[0]:
+            a_file = st.file_uploader("Analyze Audio File", type=["wav", "mp3", "flac", "ogg", "m4a", "aac", "mpg", "mpeg"], key="deep_analyze_uploader")
+            run_deep_btn = st.button("Run Deep Analysis →", key="btn_deep_run", disabled=(a_file is None))
+            if a_file:
+                d_sig = f"deep_{a_file.name}_{a_file.size}"
+                if run_deep_btn or st.session_state.get("processed_file_hash") != d_sig:
+                    st.session_state.processed_file_hash = d_sig
+                    audio_data = a_file.getvalue()
+                    st.session_state.current_audio_bytes = audio_data
+                    st.session_state.current_audio_name = a_file.name
+                    with st.spinner("Extracting 102 acoustic feature descriptors…"):
+                        try:
+                            res = analyze_file(a_file.name, audio_data, a_file.type)
+                            st.session_state.last_result = res
+                            st.session_state.last_time = datetime.now().strftime("%d %b %Y · %I:%M %p")
+                            st.session_state.current_audio_duration = float(res.get("duration_seconds", 0.0) or 4.0)
+                            fin = res.get("final", {})
+                            st.session_state.history.insert(0, {
+                                "name": a_file.name,
+                                "type": a_file.name.split(".")[-1].upper(),
+                                "result": fin.get("action", "verify").upper(),
+                                "confidence": pct(fin.get("confidence", 0.724)),
+                                "date": st.session_state.last_time,
+                            })
+                            st.success(f"✓ {a_file.name} successfully analyzed!")
+                            time.sleep(0.3)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Analysis failed: {e}")
+
+        with deep_tabs[1]:
+            deep_mic = st.audio_input("Record Speech for Studio Inspection", key=f"deep_mic_{st.session_state.live_rec_key}")
+            run_deep_mic = st.button("Analyze Studio Recording →", key="btn_deep_mic", disabled=(deep_mic is None))
+            if deep_mic:
+                dm_sig = f"deep_mic_{len(deep_mic.getvalue())}"
+                if run_deep_mic or st.session_state.get("processed_mic_hash") != dm_sig:
+                    st.session_state.processed_mic_hash = dm_sig
+                    dm_data = deep_mic.getvalue()
+                    st.session_state.current_audio_bytes = dm_data
+                    dm_name = f"studio_mic_{datetime.now().strftime('%H%M%S')}.wav"
+                    st.session_state.current_audio_name = dm_name
+                    with st.spinner("Processing live studio microphone audio stream…"):
+                        try:
+                            res = analyze_file(dm_name, dm_data, "audio/wav")
+                            st.session_state.last_result = res
+                            st.session_state.last_time = datetime.now().strftime("%d %b %Y · %I:%M %p")
+                            st.session_state.current_audio_duration = float(res.get("duration_seconds", 0.0) or 4.0)
+                            fin = res.get("final", {})
+                            st.session_state.history.insert(0, {
+                                "name": dm_name,
+                                "type": "WAV",
+                                "result": fin.get("action", "verify").upper(),
+                                "confidence": pct(fin.get("confidence", 0.724)),
+                                "date": st.session_state.last_time,
+                            })
+                            st.success("✓ Studio recording analyzed!")
+                            time.sleep(0.3)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Live studio analysis failed: {e}")
+
         st.markdown('</div>', unsafe_allow_html=True)
+
+        # Detailed Inspection Breakdown Card if last_result exists
+        if st.session_state.get("last_result"):
+            lr = st.session_state.last_result
+            fin = lr.get("final", {})
+            act_code, act_label, act_desc = decision(fin.get("action"))
+            b_bg = "#ecfdf5" if act_code == "allow" else "#fef2f2" if act_code == "escalate" else "#fffbeb"
+            b_fg = "#059669" if act_code == "allow" else "#dc2626" if act_code == "escalate" else "#d97706"
+            b_bdr = "#a7f3d0" if act_code == "allow" else "#fecaca" if act_code == "escalate" else "#fde68a"
+            sp_p = float(fin.get("spoof_probability", 0.0))
+            real_p = max(0.0, 1.0 - sp_p)
+            c_val = float(fin.get("confidence", 0.0))
+            rk_val = float(fin.get("risk_score", 0.0))
+            f_name = lr.get("filename") or st.session_state.get("current_audio_name", "audio")
+            dur = lr.get("duration_seconds", 0.0)
+            wins = lr.get("windows_analyzed") or len(lr.get("windows", [])) or 1
+
+            expls = "".join(f'<div style="padding:4px 0; color:#475569;">&bull; {e}</div>' for e in fin.get("explanation", []))
+
+            r_html(f"""
+            <div class="vcg-card" style="margin-top:16px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+                    <div style="font-size:16px; font-weight:800; color:#18202f;">Latest Inspection Breakdown</div>
+                    <div style="display:inline-flex; align-items:center; gap:5px; background:{b_bg}; color:{b_fg}; border:1px solid {b_bdr}; border-radius:9999px; padding:3px 12px; font-size:12px; font-weight:700;">
+                        {act_label}
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px; margin-bottom:14px; text-align:center;">
+                    <div style="background:#faf8f5; padding:8px; border-radius:8px; border:1px solid #ede9e2;">
+                        <div style="font-size:10px; color:#8c96a5;">Real Voice</div>
+                        <div style="font-size:16px; font-weight:800; color:#059669;">{real_p*100:.1f}%</div>
+                    </div>
+                    <div style="background:#faf8f5; padding:8px; border-radius:8px; border:1px solid #ede9e2;">
+                        <div style="font-size:10px; color:#8c96a5;">Spoof Prob</div>
+                        <div style="font-size:16px; font-weight:800; color:#dc2626;">{sp_p*100:.1f}%</div>
+                    </div>
+                    <div style="background:#faf8f5; padding:8px; border-radius:8px; border:1px solid #ede9e2;">
+                        <div style="font-size:10px; color:#8c96a5;">Confidence</div>
+                        <div style="font-size:16px; font-weight:800; color:#18202f;">{c_val*100:.1f}%</div>
+                    </div>
+                    <div style="background:#faf8f5; padding:8px; border-radius:8px; border:1px solid #ede9e2;">
+                        <div style="font-size:10px; color:#8c96a5;">Windows</div>
+                        <div style="font-size:16px; font-weight:800; color:#18202f;">{wins} ({dur}s)</div>
+                    </div>
+                </div>
+                <div style="font-size:12px; font-weight:700; color:#18202f; margin-bottom:4px;">Inference Reasons:</div>
+                <div style="font-size:11.5px; background:#faf8f5; border:1px solid #ede9e2; border-radius:8px; padding:10px 14px;">
+                    {expls or '<span style="color:#8c96a5;">No specific reasons flagged.</span>'}
+                </div>
+            </div>
+""")
+            if st.session_state.get("current_audio_bytes"):
+                st.audio(st.session_state.current_audio_bytes, format="audio/wav")
 
     with col_a2:
         r_html(f"""
