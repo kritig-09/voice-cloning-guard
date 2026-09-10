@@ -56,7 +56,7 @@ def analyze_file(name, data, mime):
 health = {}
 online = False
 try:
-    r = requests.get(f"{API_URL}/health", timeout=4)
+    r = requests.get(f"{API_URL}/health", timeout=30)
     r.raise_for_status()
     health = r.json()
     online = bool(health.get("model_connected"))
