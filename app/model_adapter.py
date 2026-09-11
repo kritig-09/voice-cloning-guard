@@ -28,13 +28,6 @@ class VoiceCloningModelAdapter(ModelAdapter):
         if not self.model_path.exists():
             raise FileNotFoundError(f"Model file not found: {self.model_path.resolve()}")
         self.model = joblib.load(self.model_path)
-        # Metadata for UI/health transparency. The original model predates the
-        # bundle-with-metadata format the improved model uses, so these are
-        # fixed constants describing the known, fixed pipeline rather than
-        # values read from the file itself.
-        self.feature_count = 13
-        self.feature_version = "original_mfcc13"
-        self.sample_count = None
 
     def predict(self, waveform: np.ndarray, sample_rate: int) -> DetectionResult:
         waveform = np.asarray(waveform, dtype=np.float32)
