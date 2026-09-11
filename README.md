@@ -1,394 +1,326 @@
 # VoiceCloneGuard
 
-**AI voice deepfake detection and risk assessment for voice-based impersonation attacks.**
+**AI voice deepfake detection and impersonation-risk assessment for voice-based attacks.**
 
-VoiceCloneGuard is a Smart India Hackathon (SIH) prototype designed to detect potentially AI-generated or cloned speech and translate model evidence into a practical security response. Unlike a simple binary classifier, the system combines acoustic analysis, rolling-window evidence, temporal smoothing, risk scoring, and a conservative decision policy to produce **Allow**, **Verify Identity**, or **Escalate** outcomes.
+VoiceCloneGuard is a Smart India Hackathon (SIH) prototype that combines a machine-learning voice authenticity detector with a security-oriented decision workflow. Instead of returning only a binary label, the system analyzes audio in rolling windows, produces a synthetic-voice likelihood, checks whether the audio is acoustically unfamiliar to its reference distribution, and maps the combined evidence to **Allow, Verify, or Escalate**.
 
-> **Prototype status:** VoiceCloneGuard is a research/demo system. A model score is evidence, not proof of a person's identity. High-risk results should trigger independent verification rather than automatic accusations or irreversible actions.
+> **Prototype status:** This is a research/demo system. A model score is evidence, not proof of a person's identity. Uncertain or high-risk results should trigger independent verification.
 
 ---
 
-## 1. Project Information
+## Project Information
 
 | Field | Value |
 |---|---|
-| **Project** | VoiceCloneGuard |
-| **SIH Problem ID** | SIH26104 |
-| **Problem** | AI-powered real-time detection and prevention of voice-cloning impersonation attacks |
-| **Category** | Software |
-| **Primary UI** | Streamlit dashboard |
-| **Backend API** | FastAPI |
-| **Core classifier** | Random Forest |
-| **Audio processing** | librosa + FFmpeg |
-| **Language** | Python 3.11 |
+| Project | VoiceCloneGuard |
+| SIH Problem ID | SIH26104 |
+| Problem theme | AI-powered detection and prevention of voice-cloning impersonation attacks |
+| Category | Software |
+| Primary interface | Streamlit dashboard |
+| Backend | FastAPI |
+| Core ML | scikit-learn Random Forest |
+| Acoustic representation | 102 rich acoustic features |
+| Training corpus | MLAAD-tiny — 15,290 audio files |
+| Audio pipeline | librosa + FFmpeg |
 
 ---
 
-## 2. Problem Statement
+## Problem
 
-Generative AI has made voice cloning and synthetic speech generation increasingly accessible. A short reference recording can be enough to produce speech that sounds convincing to a human listener. In a security context, this creates risks such as:
+Modern text-to-speech and voice-conversion systems can generate convincing synthetic speech from short reference recordings. This creates a practical security problem for phone calls, customer support, financial workflows, family-member impersonation, and other voice-mediated interactions.
 
-- family-member impersonation and emergency-payment scams;
-- executive or employee impersonation;
-- voice-phishing and social engineering;
-- fabricated recordings and misinformation;
-- attempts to defeat voice-based verification workflows.
-
-A defensive solution must therefore do more than output a single probability. It should normalize inconsistent audio, analyze evidence over time, expose uncertainty, and turn detection evidence into a proportionate security action.
+A defensive system needs more than a single score. It should handle variable audio, aggregate evidence over time, expose uncertainty, and translate model output into a proportionate security response.
 
 ---
 
-## 3. Proposed Solution
+## Proposed Solution
 
-VoiceCloneGuard wraps an acoustic voice-spoof detector inside a security-oriented decision pipeline:
+VoiceCloneGuard combines five layers:
 
-```text
-Audio Input
-    ↓
-Decode + Normalize
-    ↓
-Acoustic Feature Extraction
-    ↓
-Voice Spoof Probability
-    ↓
-Rolling 4 s Windows
-    ↓
-Temporal Risk Fusion
-    ↓
-Security Policy
-    ↓
-ALLOW / VERIFY / ESCALATE
+1. **Audio input** — upload or record speech.
+2. **Normalization** — decode, convert where required, load as mono audio, and prepare the signal for analysis.
+3. **Acoustic detector** — extract 102 rich acoustic features and evaluate them with the trained Random Forest.
+4. **Evidence layer** — analyze overlapping windows, smooth the detector signal over time, and calculate calibrated OOD/domain-familiarity evidence.
+5. **Risk policy** — map the evidence to `ALLOW`, `VERIFY`, or `ESCALATE`.
+
+The OOD signal is treated as a **secondary uncertainty/domain signal**. It does not change the Random Forest's underlying synthetic-voice probability.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A[Audio] --> B[Normalize]
+    B --> C[102 Acoustic Features]
+    C --> D[MLAAD-trained RF]
+    D --> E[Synthetic Probability]
+    E --> F[Rolling Risk + OOD]
+    F --> G[Allow / Verify / Escalate]
+    G --> H[Dashboard / API]
 ```
 
-The prototype supports both the original 13-MFCC detector and a richer-feature Random Forest model. The application prefers `models/improved_voice_model.pkl` when it is available and otherwise falls back to `models/voice_cloning_model.pkl`.
+Default rolling analysis:
+
+- **Window:** 4 seconds
+- **Hop:** 1 second
 
 ---
 
-# 4. Model Features and Capabilities
+## Key Features
 
-## 4.1 Rich acoustic feature analysis
+### Detection and risk
 
-The improved prototype does not rely on a single acoustic measurement. It creates a fixed-length feature vector from multiple complementary views of the waveform.
+- 102-feature acoustic representation
+- Random Forest deepfake detector
+- Rolling-window analysis
+- Temporal risk smoothing
+- Conservative `ALLOW / VERIFY / ESCALATE` policy
+- Optional transaction-risk context
+- OOD/domain-familiarity evidence
+- Window-level evidence reporting
+- Tail-window coverage for complete uploads
 
-### MFCC features
+### Audio support
 
-The system extracts **13 Mel-Frequency Cepstral Coefficients (MFCCs)**. MFCCs summarize the short-time spectral envelope of speech and are used to represent vocal and phonetic characteristics.
+- WAV
+- FLAC
+- MP3
+- OGG
+- M4A
+- AAC
+- MPEG
+- MPG
 
-For each MFCC coefficient, the system calculates:
+### Product and interface
 
-- mean value;
-- standard deviation.
+- FastAPI REST API
+- WebSocket streaming contract
+- Streamlit security dashboard
+- Live microphone recording
+- Upload-based analysis
+- Waveform visualization
+- Mel spectrogram
+- MFCC heatmap
+- Forensic acoustic diagnostics
+- 102-dimensional feature inspection
+- Analysis history
+- Privacy-oriented temporary-file handling
 
-This produces **26 MFCC statistics**.
+### Supporting forensic diagnostics
 
-### Delta features
+The dashboard also calculates additional acoustic measurements for inspection and explanation:
 
-The system calculates the first temporal derivative of the MFCC sequence (**delta coefficients**), which captures how the acoustic representation changes over time.
+- Fundamental frequency (F0)
+- Voiced ratio
+- Harmonic/noise ratio proxy
+- Spectral flux
+- Approximate F1/F2/F3 formants
+- Jitter proxy
+- Shimmer proxy
+- Within-recording segment consistency
 
-For the 13 delta coefficients, the system again calculates mean and standard deviation, contributing **26 statistics**.
-
-### Delta-delta features
-
-The second temporal derivative (**delta-delta coefficients**) captures acceleration or curvature in the MFCC trajectory. Mean and standard deviation are retained for all 13 coefficients, contributing **26 statistics**.
-
-### Spectral characteristics
-
-The improved pipeline additionally measures:
-
-| Feature | Purpose |
-|---|---|
-| **Spectral centroid** | Represents the spectral center of mass / perceived brightness |
-| **Spectral bandwidth** | Measures spectral spread around the centroid |
-| **Spectral rolloff** | Captures the frequency below which most spectral energy lies |
-| **Zero-crossing rate** | Describes rapid waveform sign changes and signal texture |
-| **RMS energy** | Represents signal energy / loudness |
-
-For each descriptor, mean and standard deviation are retained, adding **10 statistics**.
-
-### Spectral contrast
-
-Spectral contrast measures differences between prominent spectral peaks and valleys across frequency bands. The current implementation retains the mean and standard deviation of the contrast bands.
-
-### Feature-vector size
-
-With the current implementation and librosa defaults, the improved extractor produces a **102-dimensional acoustic feature vector**:
-
-```text
-13 MFCC × 2                  = 26
-13 Delta × 2                 = 26
-13 Delta-Delta × 2           = 26
-5 spectral descriptors × 2   = 10
-7 spectral-contrast bands × 2 = 14
-----------------------------------
-Total                         = 102 features
-```
-
-This representation captures both static spectral characteristics and short-term temporal behavior.
+These are **supporting diagnostics**. They are not presented as standalone proof of AI generation, and the jitter/shimmer/formant calculations are prototype-level estimates.
 
 ---
 
-## 4.2 Improved Random Forest classifier
+## Machine-Learning Model
 
-The extracted acoustic feature vector is passed to a **Random Forest classifier**.
+### Original detector
+
+The repository's original detector uses:
+
+- 13 mean MFCC features
+- The original `voice_cloning_model.pkl`
+- Original class convention: **class 0 = AI-cloned, class 1 = real**
+
+It remains supported as a fallback model.
+
+### Current improved detector
+
+The current deployed prototype uses:
+
+**102 rich acoustic features:**
+
+- 13 MFCC means
+- 13 MFCC standard deviations
+- 13 delta-MFCC means
+- 13 delta-MFCC standard deviations
+- 13 delta-delta means
+- 13 delta-delta standard deviations
+- Spectral centroid mean/std
+- Spectral bandwidth mean/std
+- Spectral rolloff mean/std
+- Zero-crossing-rate mean/std
+- RMS energy mean/std
+- 7 spectral-contrast means
+- 7 spectral-contrast standard deviations
 
 The improved model uses:
 
+- **Class 0 = real**
+- **Class 1 = AI-cloned**
+
+The application prefers:
+
 ```text
-Class 0 → Real voice
-Class 1 → AI-cloned / spoofed voice
+models/improved_voice_model.pkl
 ```
 
-The classifier returns class probabilities. The adapter converts the spoof-class probability into a normalized value called `spoof_probability`, which is then consumed by the rolling risk engine.
-
-The original model is retained for compatibility:
+and falls back to:
 
 ```text
-Original model:
-13 mean MFCC features
-Class 0 → AI-cloned
-Class 1 → Real
-```
-
-The adapter layer handles these different conventions and exposes a consistent downstream detection interface.
-
----
-
-## 4.3 Rolling-window detection
-
-Instead of relying only on one score for an entire recording, VoiceCloneGuard analyzes the audio in overlapping windows.
-
-Default configuration:
-
-```text
-Window length = 4 seconds
-Hop length    = 1 second
-```
-
-For every window, the system records:
-
-- start and end time;
-- spoof probability;
-- OOD score field;
-- risk score;
-- confidence;
-- action;
-- model explanation;
-- policy reasons.
-
-The remaining tail of the recording is also analyzed so the response covers the complete upload.
-
-This creates a temporal evidence trail that the dashboard can visualize.
-
----
-
-## 4.4 Temporal risk smoothing
-
-The rolling risk engine stores recent spoof probabilities and applies increasing weights to newer observations. Recent evidence therefore influences the security state more strongly than older evidence.
-
-Conceptually:
-
-```text
-Older evidence  → lower weight
-Recent evidence → higher weight
-                 ↓
-          Smoothed spoof signal
-```
-
-The engine then combines the smoothed signal with optional contextual risk.
-
----
-
-## 4.5 Context-aware security policy
-
-The model probability is kept separate from contextual security factors.
-
-The API can accept:
-
-- transaction risk;
-- verified-contact context;
-- an optional speaker-consistency field for future extension;
-- an optional OOD score.
-
-Context affects the **response policy**, not the underlying ML probability.
-
-The current policy maps risk into three operational actions:
-
-| Condition | Action |
-|---|---|
-| Low risk | **ALLOW** |
-| Elevated risk or uncertainty | **VERIFY IDENTITY** |
-| High risk with sufficient confidence | **ESCALATE** |
-
-The goal is to use detection as a warning and verification trigger, not as proof of identity.
-
----
-
-## 4.6 Uncertainty-aware confidence
-
-The risk engine treats uncertainty explicitly. When an OOD score indicates that audio may be outside the model's known distribution, confidence is reduced rather than artificially increased.
-
-The repository contains the integration hook for OOD scoring, but a dedicated OOD detector is **not yet trained in the current prototype**. This is documented as future work rather than presented as an implemented production capability.
-
----
-
-## 4.7 Multi-format audio support
-
-The API accepts:
-
-```text
-WAV  FLAC  MP3  OGG  M4A  AAC  MPEG  MPG
-```
-
-WAV and FLAC can be analyzed directly. Other formats are converted to 16 kHz mono WAV using **FFmpeg** before feature extraction.
-
----
-
-## 4.8 Audio validation and normalization
-
-Before inference, the pipeline:
-
-- decodes the audio;
-- converts multi-channel input to mono;
-- resamples to 16 kHz;
-- normalizes waveform amplitude;
-- rejects empty input;
-- rejects silent input.
-
-These checks reduce avoidable failures and prevent meaningless inputs from being treated as valid detections.
-
----
-
-## 4.9 Explainability and evidence
-
-VoiceCloneGuard returns structured evidence rather than only a binary label.
-
-For each analyzed window, the API can expose:
-
-```text
-Spoof probability
-Risk score
-Confidence
-Action
-Reasons
-Feature-pipeline information
-```
-
-The dashboard presents this through risk cards, a rolling timeline, window-level analysis, peak-risk information, and technical response data.
-
-The improved model also stores the feature-pipeline version and number of features used by the saved model bundle.
-
----
-
-## 4.10 Privacy-first processing
-
-The application follows a temporary-processing pattern:
-
-1. receive uploaded audio;
-2. write it to a temporary server-side file;
-3. decode and analyze it;
-4. generate metadata/evidence;
-5. delete the temporary files.
-
-Raw audio is not intentionally written into the application event record. Deployment operators should still configure logging, storage, backups, and access controls appropriately for production use.
-
----
-
-## 4.11 FastAPI backend
-
-The backend exposes the detector as an API that can be integrated with other applications.
-
-### Endpoints
-
-| Endpoint | Purpose |
-|---|---|
-| `GET /` | Service metadata |
-| `GET /health` | Health and model-status check |
-| `POST /score` | Risk-policy calculation from supplied probabilities |
-| `POST /analyze` | Full audio analysis and rolling-window inference |
-| `WS /stream` | Streaming inference contract for float32 16 kHz audio |
-
-FastAPI/Swagger documentation is available at `/docs` when the service is running.
-
----
-
-## 4.12 Streamlit security dashboard
-
-The Streamlit interface is designed for demonstrations and analyst review. It exposes the model results as a security workflow instead of only showing a raw classifier output.
-
-The dashboard includes:
-
-- detection-engine status;
-- audio upload;
-- AI-cloned likelihood;
-- risk score;
-- confidence;
-- security decision;
-- verification/escalation guidance;
-- audio playback;
-- evidence summary;
-- rolling risk timeline;
-- window-level analysis;
-- peak-risk window;
-- technical response information.
-
----
-
-# 5. End-to-End Technical Workflow
-
-```text
-┌───────────────────┐
-│   Audio Input     │
-│ WAV/FLAC/MP3/...  │
-└─────────┬─────────┘
-          ↓
-┌───────────────────┐
-│ Decode + Validate │
-│ 16 kHz / Mono     │
-└─────────┬─────────┘
-          ↓
-┌───────────────────────┐
-│ Rich Acoustic Features│
-│ MFCC + Delta + Spect. │
-└─────────┬─────────────┘
-          ↓
-┌──────────────────────┐
-│ Random Forest Model  │
-│ Spoof Probability    │
-└─────────┬────────────┘
-          ↓
-┌──────────────────────┐
-│ Rolling Risk Engine  │
-│ Temporal Evidence    │
-└─────────┬────────────┘
-          ↓
-┌──────────────────────┐
-│ Security Policy      │
-│ Allow / Verify / Esc │
-└─────────┬────────────┘
-          ↓
-┌──────────────────────┐
-│ Dashboard / REST API │
-│ Evidence + Timeline  │
-└──────────────────────┘
+models/voice_cloning_model.pkl
 ```
 
 ---
 
-# 6. Technology Stack
+## MLAAD Training and Evaluation
 
-- **Python 3.11** — runtime
-- **FastAPI** — inference and risk API
-- **Streamlit** — interactive dashboard
-- **scikit-learn** — Random Forest classifier
-- **librosa** — audio loading and acoustic features
-- **FFmpeg** — additional audio-format conversion
-- **NumPy** — numerical processing
-- **pytest** — automated testing
-- **Docker** — reproducible backend deployment
+The current improved model was trained using the **MLAAD-tiny** corpus:
+
+```text
+Total: 15,290 audio files
+Original / bona-fide: 7,390
+Fake / spoof:          7,900
+```
+
+The feature pipeline successfully produced:
+
+```text
+15,290 × 102 feature matrix
+0 extraction failures
+```
+
+The final Random Forest was selected using a validation comparison and then retrained on the combined training + validation partition.
+
+### Held-out test result
+
+On the untouched test set:
+
+| Metric | Result |
+|---|---:|
+| **Accuracy** | **91.37%** |
+| **Precision** | **86.50%** |
+| **Recall** | **98.70%** |
+| **F1** | **92.20%** |
+| **ROC-AUC** | **97.84%** |
+
+Test confusion matrix:
+
+```text
+                 Predicted
+                 Real   Fake
+Actual Real       782    154
+Actual Fake        13    987
+```
+
+The reported metrics above come from the current MLAAD experiment. They should **not** be interpreted as universal real-world accuracy across every language, microphone, codec, recording environment, or unseen synthesis system.
 
 ---
 
-# 7. Repository Structure
+## OOD / Domain Familiarity
+
+The current prototype includes a separate **OOD (out-of-distribution) detector** based on the same 102-feature representation.
+
+Its role is different from the deepfake classifier:
+
+```text
+Random Forest
+    ↓
+Synthetic-voice likelihood
+
+OOD detector
+    ↓
+Domain familiarity / unfamiliarity
+```
+
+The OOD result is used as a secondary security signal. When an input is acoustically far from the reference distribution, the system can prefer **VERIFY** rather than automatically escalating solely because the classifier score is high.
+
+### Important limitation
+
+OOD is a **domain-familiarity signal**, not an independent proof that audio is fake. A recording can be unfamiliar because of microphone characteristics, messaging compression, language, channel conditions, or other acquisition differences.
+
+---
+
+## Risk Engine
+
+VoiceCloneGuard uses a rolling risk engine to aggregate recent detector scores.
+
+Default behavior:
+
+```text
+Synthetic signal elevated
+        +
+High-confidence/familiar-domain evidence
+        ↓
+Higher risk
+
+High OOD / unfamiliar domain
+        ↓
+Verification-first policy
+```
+
+The risk engine supports:
+
+- Temporal smoothing across recent windows
+- Synthetic-score thresholds
+- OOD-aware uncertainty
+- Transaction-risk context
+- Verified-contact context
+- `ALLOW`
+- `VERIFY`
+- `ESCALATE`
+
+The classifier probability itself remains separate from the policy decision.
+
+---
+
+## Dashboard
+
+The Streamlit dashboard is designed as a security-analysis console rather than a simple classifier demo.
+
+### Main workspace
+
+- Upload audio
+- Record live voice
+- Analyze through the FastAPI backend
+- View waveform
+- View spectrogram
+- View MFCC map
+- Inspect forensic diagnostics
+- Inspect the 102-feature vector
+
+### Result view
+
+The dashboard separates:
+
+- **AI Likelihood** — synthetic probability from the trained detector
+- **Model Confidence** — strength of the detector score
+- **Domain Familiarity** — whether the audio resembles the reference distribution
+- **Risk Score** — policy-level risk
+- **Decision** — Allow / Verify / Escalate
+
+This separation is intentional: unfamiliar audio should not automatically be described as fake.
+
+---
+
+## Technology Stack
+
+- **Python 3.11**
+- **FastAPI** — backend API
+- **Streamlit** — security dashboard
+- **scikit-learn** — Random Forest and evaluation utilities
+- **librosa** — audio decoding and acoustic feature extraction
+- **FFmpeg** — format conversion
+- **NumPy / Pandas** — feature and result handling
+- **Matplotlib** — acoustic visualizations
+- **pytest** — automated tests
+- **Docker** — containerized API runtime
+
+---
+
+## Repository Structure
 
 ```text
 VoiceCloneGuard/
@@ -403,6 +335,9 @@ VoiceCloneGuard/
 ├── dashboard.py
 ├── evaluate_model.py
 ├── train_improved_model.py
+├── scripts/
+│   ├── demo_model.py
+│   └── demo_rolling.py
 ├── app/
 │   ├── __init__.py
 │   ├── config.py
@@ -411,17 +346,14 @@ VoiceCloneGuard/
 │   ├── main.py
 │   ├── model_adapter.py
 │   ├── models.py
+│   ├── ood_detector.py
 │   ├── privacy.py
 │   └── risk_engine.py
 ├── docs/
 │   ├── api.md
 │   └── architecture.md
 ├── models/
-│   ├── README.md
-│   └── improved_voice_model.pkl
-├── scripts/
-│   ├── demo_model.py
-│   └── demo_rolling.py
+│   └── README.md
 ├── tests/
 │   ├── test_api.py
 │   └── test_risk_engine.py
@@ -434,11 +366,18 @@ VoiceCloneGuard/
 
 ---
 
-# 8. Installation
+## Installation
+
+### 1. Clone
 
 ```bash
-git clone https://github.com/kritig-09/voice-cloning-guard.git
-cd voice-cloning-guard
+git clone https://github.com/Mohit-git22/VoiceCloneGuard.git
+cd VoiceCloneGuard
+```
+
+### 2. Create a virtual environment
+
+```bash
 python -m venv .venv
 ```
 
@@ -448,21 +387,68 @@ Windows PowerShell:
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Ensure FFmpeg is installed and available on PATH, or set `FFMPEG_BIN` to the executable path.
+### 3. Add the model artifact
+
+Place:
+
+```text
+models/improved_voice_model.pkl
+```
+
+in the `models/` directory.
+
+The original model can be used as a fallback:
+
+```text
+models/voice_cloning_model.pkl
+```
+
+The improved model binary is intentionally not required to be committed to source control.
+
+### 4. Ensure FFmpeg is available
+
+Windows:
+
+```powershell
+ffmpeg -version
+```
+
+Linux/macOS:
+
+```bash
+ffmpeg -version
+```
+
+You can override the executable with:
+
+```text
+FFMPEG_BIN
+```
 
 ---
 
-# 9. Run the Backend
+## Run the API
 
-```powershell
+```bash
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-Open `http://127.0.0.1:8000` for the API and `http://127.0.0.1:8000/docs` for Swagger.
+Endpoints:
+
+- API: `http://127.0.0.1:8000`
+- Swagger: `http://127.0.0.1:8000/docs`
+
+Health check:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
+The health endpoint reports model connectivity, model type, OOD connectivity, feature count/version, and rolling-window configuration.
 
 ---
 
-# 10. Run the Dashboard
+## Run the Dashboard
 
 In a second terminal:
 
@@ -476,87 +462,93 @@ Open:
 http://localhost:8501
 ```
 
-For a separately hosted API, set:
+For a local API:
 
 ```powershell
-$env:VCG_API_URL = "https://your-api-host.example"
+$env:VCG_API_URL = "http://127.0.0.1:8000"
 ```
 
 ---
 
-# 11. Training the Improved Prototype
+## API
 
-Training data should be organized as:
+Core endpoints:
+
+- `GET /health`
+- `POST /score`
+- `POST /analyze`
+- `WS /stream`
+
+The main `/analyze` flow:
 
 ```text
-evaluation_data/
-├── real/
-│   ├── real_01.wav
-│   └── ...
-└── fake/
-    ├── fake_01.wav
-    └── ...
+Upload
+  ↓
+Decode / convert
+  ↓
+Mono audio
+  ↓
+Rolling windows
+  ↓
+102-feature extraction
+  ↓
+Random Forest
+  ↓
+OOD evidence
+  ↓
+Rolling risk policy
+  ↓
+Response + evidence
 ```
 
-Run:
-
-```bash
-python train_improved_model.py --data evaluation_data --output models/improved_voice_model.pkl
-```
-
-For a defensible benchmark, use independent train/validation/test splits, avoid speaker leakage, document sample provenance, and use genuine synthetic speech from multiple generators rather than arbitrary AI-generated sound effects.
+See [docs/api.md](docs/api.md) for endpoint details.
 
 ---
 
-# 12. Evaluation
+## Privacy and Security Design
 
-Run:
+VoiceCloneGuard follows a privacy-oriented prototype pattern:
 
-```bash
-python evaluate_model.py --model models/improved_voice_model.pkl --data evaluation_data
-```
-
-Metrics should only be reported together with dataset composition, class definitions, split protocol, speaker separation, and provenance. The current prototype evaluation data is not sufficient to claim production-level accuracy.
-
----
-
-# 13. Testing
-
-```bash
-python -m pytest -q
-```
-
-The repository contains policy and API-level tests for core service behavior.
+- Uploaded audio is processed using temporary files.
+- Temporary server-side files are deleted after analysis.
+- Raw audio is not written to application event logs.
+- Returned evidence is metadata-oriented.
+- Analysis results are treated as evidence, not identity proof.
+- High-risk or uncertain cases should trigger independent verification.
 
 ---
 
-# 14. Current Limitations
+## Current Limitations
 
-VoiceCloneGuard is intentionally documented as a prototype. Current limitations include:
+The current prototype has several known limitations:
 
-- the improved model is a classical-ML research prototype rather than a production-grade deepfake detector;
-- the present benchmark dataset is limited and may not represent deployment conditions;
-- dedicated OOD detection is not yet trained;
-- dedicated speaker-embedding verification is not yet integrated into the final decision;
-- performance can vary across languages, microphones, codecs, compression, noise conditions, and unseen synthesis systems;
-- direct telephony/VoIP integration is not yet implemented.
-
----
-
-# 15. Future Enhancements
-
-1. Train and evaluate on larger, diverse anti-spoofing benchmarks.
-2. Add pretrained speech embeddings for stronger generalization.
-3. Train a dedicated OOD detector.
-4. Add speaker-consistency and speaker-verification fusion.
-5. Calibrate probabilities on a held-out validation set.
-6. Add real-time VoIP and call-center integration.
-7. Add model/version monitoring and audit trails.
-8. Evaluate robustness across languages, codecs, microphones, noise, and unseen generators.
+1. The core detector is a classical-ML acoustic model, not a production-grade end-to-end anti-spoofing system.
+2. The **91.37% accuracy / 97.84% ROC-AUC** figures are from the MLAAD held-out test experiment and do not guarantee equivalent performance on every real-world channel.
+3. The project-specific WhatsApp recordings demonstrated a significant domain shift from the MLAAD reference distribution.
+4. The OOD detector can identify unfamiliar acoustic conditions, but it does not determine whether unfamiliar audio is genuine or synthetic by itself.
+5. Dedicated speaker-identity verification / speaker-embedding fusion is not implemented.
+6. Jitter, shimmer, and formant outputs in the dashboard are prototype-level acoustic estimates.
+7. Segment consistency is a within-recording diagnostic, not speaker verification.
+8. The current WebSocket streaming path does not yet use the OOD detector.
+9. The prototype does not directly integrate with a production telephony or call-center platform.
+10. Robustness to unseen synthesis systems, languages, microphones, codecs, and environmental conditions requires additional validation.
 
 ---
 
-# 16. SIH Submission
+## Future Work
+
+1. Expand target-domain evaluation with properly labeled real and synthetic speech across codecs and devices.
+2. Add pretrained speech embeddings and dedicated speaker-verification models.
+3. Improve probability calibration on held-out validation data.
+4. Evaluate additional anti-spoofing architectures and synthesis families.
+5. Extend OOD evaluation across languages, channels, and acquisition conditions.
+6. Integrate with live telephony, VoIP, or call-center infrastructure.
+7. Add model/version monitoring and audit-ready experiment tracking.
+8. Test against unseen generators and adversarial audio manipulation.
+
+---
+
+## SIH Submission
 
 See:
 
@@ -566,6 +558,6 @@ See:
 
 ---
 
-# 17. License
+## License
 
 MIT — see [LICENSE](LICENSE).
