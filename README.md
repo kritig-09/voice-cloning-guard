@@ -5,6 +5,8 @@
 VoiceCloneGuard is a Smart India Hackathon (SIH) prototype that combines a machine-learning voice authenticity detector with a security-oriented decision workflow. Instead of returning only a binary label, the system analyzes audio in rolling windows, produces a synthetic-voice likelihood, checks whether the audio is acoustically unfamiliar to its reference distribution, and maps the combined evidence to **Allow, Verify, or Escalate**.
 
 > **Prototype status:** This is a research/demo system. A model score is evidence, not proof of a person's identity. Uncertain or high-risk results should trigger independent verification.
+>
+> LIVE APPLICATION : https://voice-cloning-guard-sih26.streamlit.app/
 
 ---
 
