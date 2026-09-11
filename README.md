@@ -7,7 +7,6 @@ VoiceCloneGuard is a Smart India Hackathon (SIH) prototype that combines a machi
 > **Prototype status:** This is a research/demo system. A model score is evidence, not proof of a person's identity. Uncertain or high-risk results should trigger independent verification.
 >
 > LIVE APPLICATION : https://voice-cloning-guard-sih26.streamlit.app/
-> PPT : https://onedrive.live.com/?id=%2Fpersonal%2Ff0430da4c9255c3e%2FDocuments%2FFrom%20Canva%2FDOC%2D20260910%2DWA0018%2Epptx%2Epdf&listurl=%2Fpersonal%2Ff0430da4c9255c3e%2FDocuments&ithint=file%2Cpdf&e=Rtfnlb&migratedtospo=true&parent=%2Fpersonal%2Ff0430da4c9255c3e%2FDocuments%2FFrom%20Canva&redeem=aHR0cHM6Ly8xZHJ2Lm1zL2IvYy9mMDQzMGRhNGM5MjU1YzNlL0lRQ2hzVTd1dzY4TVE2bEhSc28yZHdvWEFmaHYtUzdacWtacjhhM1FONFE2OEFJP2U9UnRmbmxi&ga=1
 
 ---
 
