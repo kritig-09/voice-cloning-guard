@@ -23,11 +23,6 @@ VoiceCloneGuard is a Smart India Hackathon (SIH) prototype that combines a machi
 | Training corpus | MLAAD-tiny — 15,290 audio files |
 | Audio pipeline | librosa + FFmpeg |
 
-## SIH Submission
-
-- **Presentation:** [View SIH Presentation](https://onedrive.live.com/?id=%2Fpersonal%2Ff0430da4c9255c3e%2FDocuments%2FFrom%20Canva%2FDOC%2D20260910%2DWA0018%2Epptx%2Epdf&listurl=%2Fpersonal%2Ff0430da4c9255c3e%2FDocuments&ithint=file%2Cpdf&e=Rtfnlb&migratedtospo=true&parent=%2Fpersonal%2Ff0430da4c9255c3e%2FDocuments%2FFrom%20Canva&redeem=aHR0cHM6Ly8xZHJ2Lm1zL2IvYy9mMDQzMGRhNGM5MjU1YzNlL0lRQ2hzVTd1dzY4TVE2bEhSc28yZHdvWEFmaHYtUzdacWtacjhhM1FONFE2OEFJP2U9UnRmbmxi&ga=1)
-- **Problem ID:** SIH26104
-
 ---
 
 ## Problem
@@ -310,40 +305,6 @@ This separation is intentional: unfamiliar audio should not automatically be des
 
 ---
 
-## Demo Screenshots
-
-### Dashboard Overview
-
-The Streamlit dashboard brings model status, rolling detection evidence, confidence, and the security decision into one analyst-facing workspace.
-
-![VoiceCloneGuard dashboard overview](assets/screenshots/dashboard-overview.png)
-
-### Mel Spectrogram and MFCC Map
-
-The dashboard exposes the time-frequency structure of the active recording alongside the MFCC representation used by the acoustic feature pipeline.
-
-![Mel spectrogram and MFCC map](assets/screenshots/spectrogram-mfcc.png)
-
-### Forensic Acoustic Diagnostics
-
-Additional inspection views include fundamental frequency, approximate formants, jitter/shimmer proxies, and within-recording segment consistency. These are supporting diagnostics rather than standalone proof of synthetic speech.
-
-![Forensic acoustic diagnostics](assets/screenshots/forensic-f0.png)
-
-### Spectral and Voicing Timelines
-
-Frame-level spectral flux and voicing structure provide another view of how the recording changes over time.
-
-![Spectral flux and voicing timelines](assets/screenshots/forensic-timelines.png)
-
-### 102-Feature Inspection
-
-The feature workspace exposes the live 102-dimensional acoustic vector used by the repository feature extractor for transparent technical inspection.
-
-![102-dimensional feature vector](assets/screenshots/feature-vector.png)
-
----
-
 ## Technology Stack
 
 - **Python 3.11**
@@ -410,7 +371,7 @@ VoiceCloneGuard/
 ### 1. Clone
 
 ```bash
-git clone https://github.com/kritig-09/voice-cloning-guard.git
+git clone https://github.com/Mohit-git22/VoiceCloneGuard.git
 cd VoiceCloneGuard
 ```
 
@@ -442,7 +403,7 @@ The original model can be used as a fallback:
 models/voice_cloning_model.pkl
 ```
 
-The improved model artifact is stored under `models/` for reproducible deployment when included in the repository.
+The improved model binary is intentionally not required to be committed to source control.
 
 ### 4. Ensure FFmpeg is available
 
